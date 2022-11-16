@@ -8,7 +8,7 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from help_functions import create_model, get_top_classes
 
 # To run this: `python Evaluation.py 0`
-
+tf.setup_gpu(gpu_nr=1)
 
 # ================== HYPER-PARAMETERS ==================
 # config: nr_classes, labels, class_weights, basemodel, image_dimension, results_and_checkpoints_folder, data_folder
@@ -20,8 +20,6 @@ log_file = open(config['results_and_checkpoints_folder'] + '/log_eval.txt', 'w')
 sys.stdout = log_file
 print('\n\n\n=============== EVALUATION ====================\n')
 # ======================================================
-
-
 
 
 # ====================== LOAD TEST SET =================
@@ -68,7 +66,7 @@ def create_model(name):
         efficient_net = EfficientNetB2(include_top=False, weights='imagenet', classes=config['nr_classes'],
                                            input_shape=(config['image_dimension'], config['image_dimension'], 3))
 
-    efficient_net.trainable=False
+    # efficient_net.trainable=False
 
     model = Sequential([
         efficient_net,
@@ -76,17 +74,15 @@ def create_model(name):
         layers.Dense(128, activation='relu'),
         layers.Dense(config['nr_classes'], activation='sigmoid')
     ])
+    # compile() configures the model for training, not necessary when only evaluating
+    # model.compile(optimizer=tf.keras.optimizers.Adam(),
+    #               loss='binary_crossentropy',
+    #               metrics=['accuracy', 'categorical_accuracy'])
 
-    model.compile(optimizer=tf.keras.optimizers.Adam(),
-                  loss='binary_crossentropy',
-                  metrics=['accuracy', 'categorical_accuracy'])
-
-    model.summary()
+    # model.summary()
     return model
 model = create_model(name=config['basemodel'])
-
 latest = tf.train.latest_checkpoint(config['results_and_checkpoints_folder'])
-print(latest)
 model.load_weights(latest)
 # ======================================================
 
@@ -97,14 +93,35 @@ model.load_weights(latest)
 # =============== PREDICT ON TEST SET ==================
 from sklearn.metrics import classification_report
 
-predictions = model.predict(test, verbose=1)
+predictions = model.predict(test, verbose=2)
 threshold = 0.5
 y_pred = 1 * (predictions > threshold)
+y_pred = predictions
 y_true = np.zeros(y_pred.shape)
 for row_idx, row in enumerate(test.classes):
     for idx in row:
         y_true[row_idx, idx] = 1
+# np.save(file=config['results_and_checkpoints_folder'] + '/y_pred', arr=predictions)
+# np.save(file=config['results_and_checkpoints_folder'] + '/y_true', arr=y_true)
 # ======================================================
+
+
+
+# ========== PLOT PREDICTIONS AND THRESHOLDS ==========
+# Inspiration from https://www.kaggle.com/code/iafoss/pretrained-resnet34-with-rgby-0-460-public-lb/notebook
+fig, axs = plt.subplots(5, 4, figsize=(12, 12))
+fig.tight_layout(h_pad=2.0)
+nr_classes = predictions.shape[1]
+labels = list(test.class_indices.keys())
+bins = np.linspace(0, 1, 75)
+for i, ax, label in zip(range(nr_classes), axs.flatten(), labels):
+    ax.hist(predictions[y_true[:, i] == 0][:, i], bins, alpha=0.5, label='false', log=True)
+    ax.hist(predictions[y_true[:, i] == 1][:, i], bins, alpha=0.5, label='true', log=True)
+    # plt.axvline(x=thresholds[i], color='k', linestyle='--') # TODO upload thresholds from training!!!
+    ax.legend(loc='upper right')
+    ax.set_title(label)
+plt.savefig(config['results_and_checkpoints_folder'] + '/prediction_thresholds.png')
+# =====================================================
 
 
 
