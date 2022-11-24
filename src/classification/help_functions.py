@@ -167,10 +167,12 @@ def create_model(n_labels, image_dimension, model_name, number_trainable_layers,
                     loss='binary_crossentropy',
                     metrics=['accuracy', 'categorical_accuracy'])
     # Binary Focal Cross Entropy
-    elif loss == 'binary_focal_crossentropy':
+    elif loss == 'focal_loss':
         model.compile(optimizer=tf.keras.optimizers.Adam(),
                     loss=BinaryFocalLoss(gamma=2, from_logits=False),
                     metrics=['accuracy', 'categorical_accuracy'])
+    else:
+        raise ValueError('This loss function is not supported!')
 
     model.summary()
     return model
@@ -256,15 +258,6 @@ def scumble(y_true):
     return SCUMBLE_D, SCUMBLE_ins
 
 
-def clean_df_and_keep_top_classes(df_file, nr_top_classes):
-    df = pd.read_json(df_file, compression='bz2')
-    top_classes = get_top_classes(nr_top_classes, df)
-    ids_x_labels = df.labels.apply(lambda classes_list: any([True for a_class in top_classes if a_class in classes_list]))
-    df_x_labels = df[ids_x_labels]
-    df_x_labels['labels'] = df['labels'].apply(lambda labels_list: [label for label in labels_list if label in top_classes])
-    df = df_x_labels.copy()
-    return df
-
 def get_flow(nr_classes, image_dimension, df_file='', batch_size=32, df=None):
     if df_file:
         df = pd.read_json(df_file, compression='bz2')
@@ -288,7 +281,7 @@ def get_flow(nr_classes, image_dimension, df_file='', batch_size=32, df=None):
             target_size=(image_dimension, image_dimension),
             shuffle=False)
     
-    return flow
+    return flow, df
 
 
 def undersample(y_true, label_names, kept_pctg, image_path):
@@ -361,7 +354,6 @@ def undersample(y_true, label_names, kept_pctg, image_path):
     return indices_to_remove
 
 
-
 def oversample(y_true, label_names, add_pctg, image_path):
     """
     Lets each image have a reward (reward := sum of label rewards in the image, where 
@@ -369,10 +361,8 @@ def oversample(y_true, label_names, add_pctg, image_path):
     it has rare labels, and small rewards when it has frequent labels.
 
     Output:
-        - indices_to_add: a list of the indices to be duplicated and the amount of times 
+        - indices_to_add: a dict of the indices to be duplicated and the amount of times 
     """
-
-    add_pctg = 0.2
     mean_ir_original, dict_ir_original = mean_imbalance_ratio(y_true=y_true, class_names=label_names)
 
     original_nr_rows = y_true.shape[0]
@@ -384,20 +374,25 @@ def oversample(y_true, label_names, add_pctg, image_path):
     label_rewards = BIG_NUMBER / y_true_copy.sum(axis=0)
     row_rewards = (label_rewards * y_true_copy).sum(axis=1)
 
+    reps = 20
     while y_true_copy.shape[0] < original_nr_rows * (1 + add_pctg):
+
         best_row = y_true_copy[np.argmax(row_rewards), :].reshape(1, nr_labels)
-        y_true_copy = np.append(y_true_copy, best_row, axis=0)
+        y_true_copy = np.append(y_true_copy, np.tile(best_row, (reps, 1)), axis=0)
+
         label_rewards = BIG_NUMBER / y_true_copy.sum(axis=0)
         row_rewards = (label_rewards * y_true_copy).sum(axis=1)
+
         idx_to_add = np.where((y_true == best_row).all(axis=1))[0]
-        indices_to_add.append(idx_to_add)
+        for _ in range(reps):
+            indices_to_add.append(idx_to_add)
 
     mean_ir_heuristics, dict_ir_heuristics = mean_imbalance_ratio(y_true=y_true_copy, class_names=label_names)
 
     plt.figure(figsize=(12, 6))
     x_axis = np.arange(len(dict_ir_original.keys()))
     plt.bar(x_axis-0.1, dict_ir_original.values(), width=0.2, label=f'Original; MeanIR: {np.round(mean_ir_original, 1)}')
-    plt.bar(x_axis+0.1, dict_ir_heuristics.values(), width=0.2, label=f'Oersampled, MeanIR: {np.round(mean_ir_heuristics, 2)}')
+    plt.bar(x_axis+0.1, dict_ir_heuristics.values(), width=0.2, label=f'Oversampled, MeanIR: {np.round(mean_ir_heuristics, 2)}')
     plt.legend(fontsize=12)
     _ = plt.xticks(x_axis, dict_ir_heuristics.keys(), rotation=75, fontsize=14)
     plt.title('Mean imbalance ratio per label')
@@ -405,7 +400,7 @@ def oversample(y_true, label_names, add_pctg, image_path):
     plt.xlabel('Label')
     save_img(image_path + '/oversampled_imbalance_ratios.png')
 
-    indices_to_add_hashable = [tuple(el) for el in indices_to_add]
+    indices_to_add_hashable = [tuple([el]) for el in indices_to_add]
     return dict(Counter(indices_to_add_hashable))
 
 
